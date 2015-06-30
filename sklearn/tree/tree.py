@@ -34,6 +34,7 @@ from ._tree import Splitter
 from ._tree import DepthFirstTreeBuilder, BestFirstTreeBuilder
 from ._tree import Tree
 from . import _tree
+import libmr
 
 __all__ = ["DecisionTreeClassifier",
            "DecisionTreeRegressor",
@@ -98,7 +99,10 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         self.n_outputs_ = None
         self.classes_ = None
         self.n_classes_ = None
-
+##################################################################
+#EVT code
+        self.leaf_parents = None
+##################################################################
         self.tree_ = None
         self.max_features_ = None
 
@@ -166,12 +170,10 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
             if self.class_weight is not None:
                 y_original = np.copy(y)
 
-            y_store_unique_indices = np.zeros(y.shape, dtype=np.int)
             for k in range(self.n_outputs_):
-                classes_k, y_store_unique_indices[:, k] = np.unique(y[:, k], return_inverse=True)
+                classes_k, y[:, k] = np.unique(y[:, k], return_inverse=True)
                 self.classes_.append(classes_k)
                 self.n_classes_.append(classes_k.shape[0])
-            y = y_store_unique_indices
 
             if self.class_weight is not None:
                 expanded_class_weight = compute_sample_weight(
@@ -308,9 +310,90 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         if self.n_outputs_ == 1:
             self.n_classes_ = self.n_classes_[0]
             self.classes_ = self.classes_[0]
-
+            
+##################################################################
+#EVT code
+        self.leaf_parents = self.fill_evt_leaf_dict()
+        self.find_leaf_points(X,y)
+    
+        print('# nodes: ' + str(self.tree_.node_count) + ',  # leafs: ' + str(len(self.leaf_parents)))
+        
+##################################################################
+            
         return self
 
+##################################################################
+#EVT code
+    def fill_evt_leaf_dict(self):
+        """find all the nodes that are the parent of a leaf and return a dictionary which stores the parent for each leaf"""
+        left = self.tree_.children_left
+        right = self.tree_.children_right
+        leaf_parents = dict()
+        self.recurse_find_leaf(left[0], 0, left, right, leaf_parents)
+        self.recurse_find_leaf(right[0],0, left, right, leaf_parents)
+        return leaf_parents
+        
+    def recurse_find_leaf(self, node, prev_node, left, right, leaf_parents):
+        """retursive function used by fill_evt_leaf_dict which iterates through the nodes of the tree to find parents of leaf nodes"""
+        if self.tree_.feature[node] == -2:
+            leaf_parents[node] = prev_node
+        else:
+            self.recurse_find_leaf(left[node], node, left, right, leaf_parents)
+            self.recurse_find_leaf(right[node], node, left, right, leaf_parents)
+
+    def find_leaf_points(self, X, y):
+        """creates the MR models for the the leafs of the tree."""
+        parent_points = dict()
+        leaf_classes = dict()
+                
+        #initialize the dictionaries to contain arrays
+        for key in self.leaf_parents:
+            parent_points[self.leaf_parents[key]] = []
+                        
+        #populate the parent_class dict with classes and the leafs the datapoint was placed in 
+        for i in range(len(X)):
+            temp_leaf = self.apply(X[i])[0]
+            cur_class = self.predict(X[i])[0]
+            leaf_classes[temp_leaf] = cur_class
+            parent_points[self.leaf_parents[temp_leaf]].append(i)
+                        
+        for leaf in leaf_classes:
+            in_class_distance= []
+            non_class_distance= []
+            for point in parent_points[self.leaf_parents[leaf]]:
+                if y[point][0] == leaf_classes[leaf]:
+                    in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
+                else:
+                    non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
+            #print('in class: ' + str(in_class_distance))
+            #print('not class: ' + str(non_class_distance))
+            #print("###########")
+            class_distances = np.array(in_class_distance)
+            non_class_distances = np.array(non_class_distance)
+            #print('in class: ' + str(class_distances))
+            #print('not class: ' + str(non_class_distances))
+            mr1 = libmr.MR()
+            mr2 = libmr.MR()
+            if len(class_distances) > 50:
+                mr1.fit_low(class_distances, 50)
+            elif len(class_distances) == 0:
+                mr1 = None
+            else:
+                mr1.fit_low(class_distances,len(class_distances))
+            if len(non_class_distances) > 50:
+                mr2.fit_high(non_class_distances, 50)
+            elif len(non_class_distances) == 0:
+                mr2 = None
+            else:
+                mr2.fit_high(non_class_distances,len(non_class_distances))
+                        
+        #for node in parent_classes:
+         #   print('classes: ' + str(parent_classes[node]))
+        #for leaf in leaves:
+         #   print(str(leaf) + ' size= ' + str(len(leaves[leaf])))
+                    
+##################################################################
+    
     def _validate_X_predict(self, X, check_input):
         """Validate X whenever one tries to predict, apply, predict_proba"""
         if self.tree_ is None:
@@ -359,11 +442,12 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         X = self._validate_X_predict(X, check_input)
         proba = self.tree_.predict(X)
         n_samples = X.shape[0]
-
+        
         # Classification
         if isinstance(self, ClassifierMixin):
             if self.n_outputs_ == 1:
                 return self.classes_.take(np.argmax(proba, axis=1), axis=0)
+
 
             else:
                 predictions = np.zeros((n_samples, self.n_outputs_))
@@ -372,7 +456,6 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
                     predictions[:, k] = self.classes_[k].take(
                         np.argmax(proba[:, k], axis=1),
                         axis=0)
-
                 return predictions
 
         # Regression
@@ -616,7 +699,7 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
         """
         X = self._validate_X_predict(X, check_input)
         proba = self.tree_.predict(X)
-
+        
         if self.n_outputs_ == 1:
             proba = proba[:, :self.n_classes_]
             normalizer = proba.sum(axis=1)[:, np.newaxis]
@@ -633,8 +716,9 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
                 normalizer = proba_k.sum(axis=1)[:, np.newaxis]
                 normalizer[normalizer == 0.0] = 1.0
                 proba_k /= normalizer
+                print("probability: " + str(proba_k))
                 all_proba.append(proba_k)
-
+                
             return all_proba
 
     def predict_log_proba(self, X):
@@ -891,3 +975,4 @@ class ExtraTreeRegressor(DecisionTreeRegressor):
             max_features=max_features,
             max_leaf_nodes=max_leaf_nodes,
             random_state=random_state)
+
