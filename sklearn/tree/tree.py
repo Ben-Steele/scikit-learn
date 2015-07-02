@@ -317,7 +317,6 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         self.find_leaf_points(X,y)
     
         print('# nodes: ' + str(self.tree_.node_count) + ',  # leafs: ' + str(len(self.leaf_parents)))
-        
 ##################################################################
             
         return self
@@ -345,10 +344,12 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         """creates the MR models for the the leafs of the tree."""
         parent_points = dict()
         leaf_classes = dict()
+        parent_classes = dict()
                 
         #initialize the dictionaries to contain arrays
         for key in self.leaf_parents:
             parent_points[self.leaf_parents[key]] = []
+            parent_classes[self.leaf_parents[key]] = []
                         
         #populate the parent_class dict with classes and the leafs the datapoint was placed in 
         for i in range(len(X)):
@@ -356,6 +357,8 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
             cur_class = self.predict(X[i])[0]
             leaf_classes[temp_leaf] = cur_class
             parent_points[self.leaf_parents[temp_leaf]].append(i)
+            if [temp_leaf, y[i][0]] not in parent_classes[self.leaf_parents[temp_leaf]]:
+                parent_classes[self.leaf_parents[temp_leaf]].append([temp_leaf, y[i][0]])
                         
         for leaf in leaf_classes:
             in_class_distance= []
@@ -365,30 +368,42 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
                     in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
                 else:
                     non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
-            #print('in class: ' + str(in_class_distance))
-            #print('not class: ' + str(non_class_distance))
-            #print("###########")
             class_distances = np.array(in_class_distance)
             non_class_distances = np.array(non_class_distance)
-            #print('in class: ' + str(class_distances))
-            #print('not class: ' + str(non_class_distances))
-            mr1 = libmr.MR()
-            mr2 = libmr.MR()
+            '''print("#################################")
+            print('node ' + str(leaf) + ' classes: ' + str(parent_classes[self.leaf_parents[leaf]]))
+            print('in class: ' + str(class_distances))
+            print('not class: ' + str(non_class_distances))'''
+            confidence_in = libmr.MR()
+            confidence_out = libmr.MR()
+            pertinence_in = libmr.MR()
+            pertinence_out = libmr.MR()
+            
             if len(class_distances) > 50:
-                mr1.fit_low(class_distances, 50)
+                confidence_in.fit_low(class_distances, 50)
+                pertinence_in.fit_high(class_distances, 50)
             elif len(class_distances) == 0:
-                mr1 = None
+                confiedence_in = None
+                pertinence_in = None
             else:
-                mr1.fit_low(class_distances,len(class_distances))
+                confidence_in.fit_low(class_distances,len(class_distances))
+                pertinence_in.fit_high(class_distances,len(class_distances))
             if len(non_class_distances) > 50:
-                mr2.fit_high(non_class_distances, 50)
+                confidence_out.fit_high(non_class_distances, 50)
+                pertinence_out.fit_low(non_class_distances, 50)
             elif len(non_class_distances) == 0:
-                mr2 = None
+                confidence_out = None
+                pertinence_out = None
             else:
-                mr2.fit_high(non_class_distances,len(non_class_distances))
-                        
-        #for node in parent_classes:
-         #   print('classes: ' + str(parent_classes[node]))
+                confidence_out.fit_high(non_class_distances,len(non_class_distances))
+                pertinence_out.fit_low(non_class_distances,len(non_class_distances))
+                
+            confidence[leaf] = [confidence_in, confidence_out]
+            pertinence[leaf] = [pertinence_in, pertinence_out]
+            
+        #for node in parent_points:
+           # print('node ' + str(node) + ' points: ' + str(parent_points[node]))
+            #print('node ' + str(node) + ' classes: ' + str(parent_classes[node]))
         #for leaf in leaves:
          #   print(str(leaf) + ' size= ' + str(len(leaves[leaf])))
                     
