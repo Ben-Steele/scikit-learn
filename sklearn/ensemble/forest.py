@@ -144,7 +144,7 @@ class BaseForest(six.with_metaclass(ABCMeta, BaseEnsemble,
         self.verbose = verbose
         self.warm_start = warm_start
         self.class_weight = class_weight
-
+    
     def apply(self, X):
         """Apply trees in the forest to X, return leaf indices.
 
@@ -290,6 +290,7 @@ class BaseForest(six.with_metaclass(ABCMeta, BaseEnsemble,
         return self
 
 
+    
     @abstractmethod
     def _set_oob_score(self, X, y):
         """Calculate out of bag predictions and score."""
@@ -458,6 +459,64 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
 
         return y, expanded_class_weight
 
+##################################################################
+#EVT code
+    def evt_predict_proba(self, X):
+        # Check data
+        X = self._validate_X_predict(X)
+
+        # Assign chunk of trees to jobs
+        n_jobs, _, _ = _partition_estimators(self.n_estimators, self.n_jobs)
+
+        # Parallel loop
+        all_proba = Parallel(n_jobs=n_jobs, verbose=self.verbose,
+                             backend="threading")(
+            delayed(_parallel_helper)(e, 'evt_predict_proba', X,
+                                      check_input=False)
+            for e in self.estimators_)
+
+        # Reduce
+        proba = all_proba[0]
+        if len(X) == 1 :
+            counter = 1
+            for j in range(1, len(all_proba)):
+                if len(all_proba[j]) != 0:
+                    if len(proba) == 0:
+                        proba = all_proba[j]
+                    else:
+                        proba += all_proba[j]
+                        counter += 1
+                        
+            proba = [proba / counter]
+
+        else:
+            
+            for k in range(len(all_proba[0])):
+                counter = 1
+                for j in range(1, len(all_proba)):
+                    if len(all_proba[j][k]) != 0:
+                        if len(proba[k]) == 0:
+                            proba[k] = all_proba[j][k]
+                        else:
+                            proba[k] += all_proba[j][k]
+                            counter += 1
+                        
+                for i in proba[k]:
+                    i = i / counter
+                
+        return proba
+
+    def evt_predict(self, X):
+        proba = self.evt_predict_proba(X)
+        classes = []
+        for i in proba:
+            if len(proba) == 0:
+                classes.append(-1)
+            else:
+                classes.append(self.classes_.take(np.argmax(i)))
+        return classes
+##################################################################
+    
     def predict(self, X):
         """Predict class for X.
 
@@ -479,7 +538,6 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
             The predicted classes.
         """
         proba = self.predict_proba(X)
-
         if self.n_outputs_ == 1:
             return self.classes_.take(np.argmax(proba, axis=1), axis=0)
 
@@ -531,15 +589,11 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
 
         # Reduce
         proba = all_proba[0]
-
         if self.n_outputs_ == 1:
             for j in range(1, len(all_proba)):
                 proba += all_proba[j]
 
             proba /= len(self.estimators_)
-#----------------------------------------------------------------------------------------
-           # print(str(proba))
-#----------------------------------------------------------------------------------------
 
         else:
             for j in range(1, len(all_proba)):

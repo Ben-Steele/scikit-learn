@@ -102,6 +102,8 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
 ##################################################################
 #EVT code
         self.leaf_parents = None
+        self.confidence = None
+        self.pertinence = None
 ##################################################################
         self.tree_ = None
         self.max_features_ = None
@@ -315,6 +317,7 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
 #EVT code
         self.leaf_parents = self.fill_evt_leaf_dict()
         self.find_leaf_points(X,y)
+        
     
         print('# nodes: ' + str(self.tree_.node_count) + ',  # leafs: ' + str(len(self.leaf_parents)))
 ##################################################################
@@ -345,6 +348,8 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         parent_points = dict()
         leaf_classes = dict()
         parent_classes = dict()
+        self.confidence = dict()
+        self.pertinence = dict()
                 
         #initialize the dictionaries to contain arrays
         for key in self.leaf_parents:
@@ -370,27 +375,23 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
                     non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
             class_distances = np.array(in_class_distance)
             non_class_distances = np.array(non_class_distance)
-            '''print("#################################")
-            print('node ' + str(leaf) + ' classes: ' + str(parent_classes[self.leaf_parents[leaf]]))
-            print('in class: ' + str(class_distances))
-            print('not class: ' + str(non_class_distances))'''
             confidence_in = libmr.MR()
             confidence_out = libmr.MR()
             pertinence_in = libmr.MR()
             pertinence_out = libmr.MR()
             
-            if len(class_distances) > 50:
-                confidence_in.fit_low(class_distances, 50)
-                pertinence_in.fit_high(class_distances, 50)
+            if len(class_distances) > 20:
+                confidence_in.fit_low(class_distances, 20)
+                pertinence_in.fit_high(class_distances, 20)
             elif len(class_distances) == 0:
                 confiedence_in = None
                 pertinence_in = None
             else:
                 confidence_in.fit_low(class_distances,len(class_distances))
                 pertinence_in.fit_high(class_distances,len(class_distances))
-            if len(non_class_distances) > 50:
-                confidence_out.fit_high(non_class_distances, 50)
-                pertinence_out.fit_low(non_class_distances, 50)
+            if len(non_class_distances) > 20:
+                confidence_out.fit_high(non_class_distances, 20)
+                pertinence_out.fit_low(non_class_distances, 20)
             elif len(non_class_distances) == 0:
                 confidence_out = None
                 pertinence_out = None
@@ -398,14 +399,8 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
                 confidence_out.fit_high(non_class_distances,len(non_class_distances))
                 pertinence_out.fit_low(non_class_distances,len(non_class_distances))
                 
-            confidence[leaf] = [confidence_in, confidence_out]
-            pertinence[leaf] = [pertinence_in, pertinence_out]
-            
-        #for node in parent_points:
-           # print('node ' + str(node) + ' points: ' + str(parent_points[node]))
-            #print('node ' + str(node) + ' classes: ' + str(parent_classes[node]))
-        #for leaf in leaves:
-         #   print(str(leaf) + ' size= ' + str(len(leaves[leaf])))
+            self.confidence[leaf] = [confidence_in, confidence_out]
+            self.pertinence[leaf] = [pertinence_in, pertinence_out]
                     
 ##################################################################
     
@@ -454,16 +449,15 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         y : array of shape = [n_samples] or [n_samples, n_outputs]
             The predicted classes, or the predict values.
         """
+
         X = self._validate_X_predict(X, check_input)
         proba = self.tree_.predict(X)
         n_samples = X.shape[0]
-        
         # Classification
         if isinstance(self, ClassifierMixin):
             if self.n_outputs_ == 1:
                 return self.classes_.take(np.argmax(proba, axis=1), axis=0)
-
-
+            
             else:
                 predictions = np.zeros((n_samples, self.n_outputs_))
 
@@ -687,7 +681,33 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             max_leaf_nodes=max_leaf_nodes,
             class_weight=class_weight,
             random_state=random_state)
-
+        
+##################################################################
+#EVT code
+    def evt_predict_proba(self, X, check_input=True):
+        X = self._validate_X_predict(X, check_input)
+        point_class = self.predict_proba(X)
+        predictions = []
+        for j in range(len(point_class)):
+            point_leaf = self.apply(X[j])[0]
+            distance = X[j][self.tree_.feature[self.leaf_parents[point_leaf]]] - self.tree_.threshold[self.leaf_parents[point_leaf]]
+            if point_leaf in self.pertinence and self.pertinence[point_leaf] != None and self.pertinence[point_leaf][0].w_score(distance) < 0.01:
+                predictions.append([])
+            elif point_leaf in self.confidence and self.confidence[point_leaf] != None:
+                #take care of the case where the evt model returns -9999, i dont know why
+                if self.confidence[point_leaf][0].w_score(distance) == -9999.0:
+                    predictions.append(point_class[j])
+                else:
+                    for i in range(len(point_class[j])):
+                        point_class[j][i] *= self.confidence[point_leaf][0].w_score(distance)
+                    predictions.append(point_class[j])
+            else:
+                predictions.append([])
+        if len(predictions) == 1:
+            predictions = predictions[0]
+        return predictions
+##################################################################
+        
     def predict_proba(self, X, check_input=True):
         """Predict class probabilities of the input samples X.
 
@@ -731,7 +751,6 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
                 normalizer = proba_k.sum(axis=1)[:, np.newaxis]
                 normalizer[normalizer == 0.0] = 1.0
                 proba_k /= normalizer
-                print("probability: " + str(proba_k))
                 all_proba.append(proba_k)
                 
             return all_proba
