@@ -104,6 +104,7 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         self.leaf_parents = None
         self.confidence = None
         self.pertinence = None
+        self.thresholds = None
 ##################################################################
         self.tree_ = None
         self.max_features_ = None
@@ -350,13 +351,13 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         parent_classes = dict()
         self.confidence = dict()
         self.pertinence = dict()
-                
+                      
         #initialize the dictionaries to contain arrays
         for key in self.leaf_parents:
             parent_points[self.leaf_parents[key]] = []
             parent_classes[self.leaf_parents[key]] = []
                         
-        #populate the parent_class dict with classes and the leafs the datapoint was placed in 
+        #populate the parent_class dict with classes and parent_points with the datapoints it is associated with
         for i in range(len(X)):
             temp_leaf = self.apply(X[i])[0]
             cur_class = self.predict(X[i])[0]
@@ -364,44 +365,122 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
             parent_points[self.leaf_parents[temp_leaf]].append(i)
             if [temp_leaf, y[i][0]] not in parent_classes[self.leaf_parents[temp_leaf]]:
                 parent_classes[self.leaf_parents[temp_leaf]].append([temp_leaf, y[i][0]])
-                        
+        #Create the libmr EVT model at each leaf
         for leaf in leaf_classes:
-            in_class_distance= []
-            non_class_distance= []
+
+            self.set_thresholds(leaf, parent_points, X, y, leaf_classes)
+            in_class_distance = []
+            non_class_distance = []
             for point in parent_points[self.leaf_parents[leaf]]:
                 if y[point][0] == leaf_classes[leaf]:
-                    in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
+                    in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.thresholds[leaf])
                 else:
-                    non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
+                    non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.thresholds[leaf])
             class_distances = np.array(in_class_distance)
             non_class_distances = np.array(non_class_distance)
+            
             confidence_in = libmr.MR()
             confidence_out = libmr.MR()
             pertinence_in = libmr.MR()
             pertinence_out = libmr.MR()
-            
-            if len(class_distances) > 20:
-                confidence_in.fit_low(class_distances, 20)
-                pertinence_in.fit_high(class_distances, 20)
-            elif len(class_distances) == 0:
-                confiedence_in = None
-                pertinence_in = None
+            if len(non_class_distances) == 0:
+                if len(class_distances) <= 1:
+                    confidence_in = None
+                    confidence_out = None
+                    pertinence_out = None
+                    pertinence_in = None
+                elif len(class_distances) <= 5:
+                    confidence_in = 1
+                    confidence_out = 1
+                    mean = np.mean(class_distances)
+                    sd = 0
+                    for i in class_distances:
+                        sd += (i - mean) ** 2
+                    sd /= (len(class_distances) - 1)
+                    sd = sd ** (0.5)
+                    pertinence_in = (mean, sd)
             else:
-                confidence_in.fit_low(class_distances,len(class_distances))
-                pertinence_in.fit_high(class_distances,len(class_distances))
-            if len(non_class_distances) > 20:
-                confidence_out.fit_high(non_class_distances, 20)
-                pertinence_out.fit_low(non_class_distances, 20)
-            elif len(non_class_distances) == 0:
-                confidence_out = None
-                pertinence_out = None
-            else:
-                confidence_out.fit_high(non_class_distances,len(non_class_distances))
-                pertinence_out.fit_low(non_class_distances,len(non_class_distances))
+                if len(class_distances) > 250:
+                    tail = 50
+                else:
+                    tail = len(class_distances) / 5
+                if tail < 3:
+                    tail = 3     
+                if len(class_distances) > 5:
+                    if np.median(class_distances) > 0:
+                        confidence_in.fit_low(class_distances, tail)
+                        pertinence_in.fit_high(class_distances, tail)
+                    else:
+                        confidence_in.fit_high(class_distances, tail)
+                        pertinence_in.fit_low(class_distances, tail)
+                else:
+                    confiedence_in = None
+                    pertinence_in = None
+                if len(non_class_distances) > 250:
+                    tail = 50
+                else:
+                    tail = len(non_class_distances) / 5
+                if tail < 3:
+                    tail = 3     
+                if len(non_class_distances) > 5:
+                    if np.median(class_distances) > 0:
+                        confidence_out.fit_high(non_class_distances, tail)
+                        pertinence_out.fit_low(non_class_distances, tail)
+                    else:
+                        confidence_out.fit_low(non_class_distances, tail)
+                        pertinence_out.fit_high(non_class_distances, tail)
+                else:
+                    confidence_out = None
+                    pertinence_out = None
                 
+                #if confidence_in != None and  confidence_in.is_valid and pertinence_in != None and pertinence_in.is_valid and confidence_out != None and confidence_out.is_valid and pertinence_out != None and pertinence_out.is_valid:
+                   # self.make_graph(class_distances, non_class_distances, confidence_in, confidence_out, pertinence_in, pertinence_out)
             self.confidence[leaf] = [confidence_in, confidence_out]
             self.pertinence[leaf] = [pertinence_in, pertinence_out]
-                    
+
+    def set_thresholds(self, leaf, parent_points, X, y, leaf_classes):
+        '''Reset leaf thresholds to more accuratly split the class'''
+        self.thresholds = dict()
+        in_class_distance= []
+        non_class_distance= []
+        #Set the threshold to a more balanced location
+        for point in parent_points[self.leaf_parents[leaf]]:
+            if y[point][0] == leaf_classes[leaf]:
+                in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
+            else:
+                non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
+        if non_class_distance != []:
+            class_distances = np.array(in_class_distance)
+            non_class_distances = np.array(non_class_distance)
+            self.thresholds[leaf] = self.tree_.threshold[self.leaf_parents[leaf]] + (np.median(class_distances) + np.median(non_class_distances)) / 2.0
+        else:
+            self.thresholds[leaf] = self.tree_.threshold[self.leaf_parents[leaf]]
+        
+    def make_graph(self, class_distances, non_class_distances, confidence_in, confidence_out, pertinence_in, pertinence_out):
+        import time
+        import matplotlib.pyplot as plt
+        from scipy.stats import norm
+        min_in = np.amin(class_distances)
+        min_out = np.amin(non_class_distances)
+        max_in = np.amax(class_distances)
+        max_out = np.amax(non_class_distances)
+        points_in = np.linspace(min_in, max_in, 100)
+        points_out = np.linspace(min_out, max_out, 100)
+        fig,(ax1,ax2) = plt.subplots(2,1)
+        ax1.plot(points_in, 1 - confidence_in.w_score_vector(points_in), label="confidence_in " + str(len(class_distances)))
+        ax1.plot(points_out, 1 - confidence_out.w_score_vector(points_out), label="confidence_out " + str(len(non_class_distances)))
+        ax2.plot(points_in, 1 - pertinence_in.w_score_vector(points_in), label="pertinence_in " + str(len(class_distances)))
+        ax2.plot(points_out, 1 - pertinence_out.w_score_vector(points_out), label="pertinence_out " + str(len(non_class_distances)))
+        for point in class_distances:
+            ax2.plot(point, .6, marker='o', color='b')
+            ax1.plot(point, .6, marker='o', color='b')
+        for point in non_class_distances:
+            ax2.plot(point, .1, marker='o', color='g')
+            ax1.plot(point, .1, marker='o', color='g')
+        ax1.legend()
+        ax2.legend()
+        plt.show()
+        time.sleep(5)
 ##################################################################
     
     def _validate_X_predict(self, X, check_input):
@@ -690,19 +769,23 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
         predictions = []
         for j in range(len(point_class)):
             point_leaf = self.apply(X[j])[0]
-            distance = X[j][self.tree_.feature[self.leaf_parents[point_leaf]]] - self.tree_.threshold[self.leaf_parents[point_leaf]]
-            if point_leaf in self.pertinence and self.pertinence[point_leaf] != None and self.pertinence[point_leaf][0].w_score(distance) < 0.01:
+            if point_leaf not in self.thresholds:
                 predictions.append([])
-            elif point_leaf in self.confidence and self.confidence[point_leaf] != None:
-                #take care of the case where the evt model returns -9999, i dont know why
-                if self.confidence[point_leaf][0].w_score(distance) == -9999.0:
-                    predictions.append(point_class[j])
-                else:
-                    for i in range(len(point_class[j])):
-                        point_class[j][i] *= self.confidence[point_leaf][0].w_score(distance)
-                    predictions.append(point_class[j])
             else:
-                predictions.append([])
+                distance = X[j][self.tree_.feature[self.leaf_parents[point_leaf]]] - self.thresholds[point_leaf]
+                if point_leaf in self.confidence and self.confidence[point_leaf][0] != None and self.confidence[point_leaf][1] != None and point_leaf in self.pertinence and self.pertinence[point_leaf][0] != None:
+                    if self.confidence[point_leaf][0] == 1:
+                        pertinence = (distance - self.pertinence[point_leaf][0][0]) / float(self.pertinence[point_leaf][0][1])
+                        from scipy.stats import norm
+                        pertinence =  2.5 * norm.pdf(pertinence)
+                        predictions.append((point_class[j],1,pertinence))
+                    elif not self.confidence[point_leaf][0].is_valid or not self.confidence[point_leaf][1].is_valid or not self.pertinence[point_leaf][0].is_valid:
+                        predictions.append((point_class[j],0,0))
+                    else:
+                        confidence = self.confidence[point_leaf][0].w_score(distance) - self.confidence[point_leaf][1].w_score(distance)
+                        predictions.append((point_class[j], confidence, self.pertinence[point_leaf][0].w_score(distance)))
+                else:
+                    predictions.append((point_class[j], 0, 0))
         if len(predictions) == 1:
             predictions = predictions[0]
         return predictions

@@ -477,40 +477,52 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
 
         # Reduce
         proba = all_proba[0]
-        if len(X) == 1 :
+        if len(X) == 1:
+            proba = proba[0] * proba[1] * proba[2]
             counter = 1
             for j in range(1, len(all_proba)):
                 if len(all_proba[j]) != 0:
                     if len(proba) == 0:
-                        proba = all_proba[j]
+                        for i in range(len(all_proba[j][0])):
+                            all_proba[j][0][i] *= all_proba[j][1] * all_proba[j][2]
+                        proba = all_proba[j][0]
                     else:
-                        proba += all_proba[j]
+                        for i in range(len(all_proba[j][0])):
+                            all_proba[j][0][i] *= all_proba[j][1] * all_proba[j][2]
+                        proba += all_proba[j][0]
                         counter += 1
                         
             proba = [proba / counter]
 
         else:
-            
+            for i in range(len(proba)):
+                proba[i] = []
             for k in range(len(all_proba[0])):
                 counter = 1
-                for j in range(1, len(all_proba)):
+                for j in range(0, len(all_proba)):
                     if len(all_proba[j][k]) != 0:
                         if len(proba[k]) == 0:
-                            proba[k] = all_proba[j][k]
+                            for i in range(len(all_proba[j][k][0])):
+                                all_proba[j][k][0][i] *= all_proba[j][k][1] * all_proba[j][k][2]
+                            proba[k] = all_proba[j][k][0]
                         else:
-                            proba[k] += all_proba[j][k]
+                            for i in range(len(all_proba[j][k][0])):
+                                all_proba[j][k][0][i] *= all_proba[j][k][1] * all_proba[j][k][2]
+                            proba[k] += all_proba[j][k][0]
                             counter += 1
                         
                 for i in proba[k]:
                     i = i / counter
-                
+                    
         return proba
 
     def evt_predict(self, X):
         proba = self.evt_predict_proba(X)
         classes = []
         for i in proba:
-            if len(proba) == 0:
+            print i
+        for i in proba:
+            if len(i) == 0:
                 classes.append(-1)
             else:
                 classes.append(self.classes_.take(np.argmax(i)))
