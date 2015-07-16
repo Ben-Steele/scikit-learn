@@ -484,11 +484,11 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
                 if len(all_proba[j]) != 0:
                     if len(proba) == 0:
                         for i in range(len(all_proba[j][0])):
-                            all_proba[j][0][i] *= all_proba[j][1] * all_proba[j][2]
+                            all_proba[j][0][i] *= all_proba[j][1] #* all_proba[j][2]
                         proba = all_proba[j][0]
                     else:
                         for i in range(len(all_proba[j][0])):
-                            all_proba[j][0][i] *= all_proba[j][1] * all_proba[j][2]
+                            all_proba[j][0][i] *= all_proba[j][1] #* all_proba[j][2]
                         proba += all_proba[j][0]
                         counter += 1
                         
@@ -502,15 +502,17 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
                 for j in range(0, len(all_proba)):
                     if len(all_proba[j][k]) != 0:
                         if len(proba[k]) == 0:
-                            for i in range(len(all_proba[j][k][0])):
-                                all_proba[j][k][0][i] *= all_proba[j][k][1] * all_proba[j][k][2]
-                            proba[k] = all_proba[j][k][0]
+                            if all_proba[j][k][2] > .001:
+                                for i in range(len(all_proba[j][k][0])):
+                                    all_proba[j][k][0][i] *= all_proba[j][k][1]# * all_proba[j][k][2]
+                                proba[k] = all_proba[j][k][0]
                         else:
-                            for i in range(len(all_proba[j][k][0])):
-                                all_proba[j][k][0][i] *= all_proba[j][k][1] * all_proba[j][k][2]
-                            proba[k] += all_proba[j][k][0]
-                            counter += 1
-                        
+                            if all_proba[j][k][2] > 0.001:
+                                for i in range(len(all_proba[j][k][0])):
+                                    all_proba[j][k][0][i] *= all_proba[j][k][1]# * all_proba[j][k][2]
+                                proba[k] += all_proba[j][k][0]
+                                counter += 1
+
                 for i in proba[k]:
                     i = i / counter
                     
@@ -519,8 +521,6 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
     def evt_predict(self, X):
         proba = self.evt_predict_proba(X)
         classes = []
-        for i in proba:
-            print i
         for i in proba:
             if len(i) == 0:
                 classes.append(-1)

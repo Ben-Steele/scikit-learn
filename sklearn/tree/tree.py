@@ -50,6 +50,7 @@ DTYPE = _tree.DTYPE
 DOUBLE = _tree.DOUBLE
 
 CRITERIA_CLF = {"gini": _tree.Gini, "entropy": _tree.Entropy}
+
 CRITERIA_REG = {"mse": _tree.MSE, "friedman_mse": _tree.FriedmanMSE}
 
 DENSE_SPLITTERS = {"best": _tree.BestSplitter,
@@ -105,6 +106,7 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         self.confidence = None
         self.pertinence = None
         self.thresholds = None
+        self.parent_children = None
 ##################################################################
         self.tree_ = None
         self.max_features_ = None
@@ -316,7 +318,7 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
             
 ##################################################################
 #EVT code
-        self.leaf_parents = self.fill_evt_leaf_dict()
+        self.leaf_parents, self.parent_children = self.fill_evt_leaf_dict()
         self.find_leaf_points(X,y)
         
     
@@ -332,50 +334,71 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         left = self.tree_.children_left
         right = self.tree_.children_right
         leaf_parents = dict()
-        self.recurse_find_leaf(left[0], 0, left, right, leaf_parents)
-        self.recurse_find_leaf(right[0],0, left, right, leaf_parents)
-        return leaf_parents
+        parent_children = dict()
+        self.recurse_find_leaf(left[0], 0, left, right, leaf_parents, parent_children)
+        self.recurse_find_leaf(right[0],0, left, right, leaf_parents, parent_children)
+        return leaf_parents, parent_children
         
-    def recurse_find_leaf(self, node, prev_node, left, right, leaf_parents):
+    def recurse_find_leaf(self, node, prev_node, left, right, leaf_parents, parent_children):
         """retursive function used by fill_evt_leaf_dict which iterates through the nodes of the tree to find parents of leaf nodes"""
         if self.tree_.feature[node] == -2:
             leaf_parents[node] = prev_node
+            if prev_node in parent_children:
+                parent_children[prev_node].append(node)
+            else:
+                parent_children[prev_node] = [node]
         else:
-            self.recurse_find_leaf(left[node], node, left, right, leaf_parents)
-            self.recurse_find_leaf(right[node], node, left, right, leaf_parents)
+            self.recurse_find_leaf(left[node], node, left, right, leaf_parents, parent_children)
+            self.recurse_find_leaf(right[node], node, left, right, leaf_parents, parent_children)
 
+    def fill_node_points(self, leaf_points, node_points):
+        self.help_fill_node_points(0, leaf_points, node_points)
+        
+    def help_fill_node_points(self, node, leaf_points, node_points):
+        if self.tree_.feature[node] == -2:
+            return leaf_points[node]
+        else:
+            left = self.help_fill_node_points(self.tree_.children_left[node], leaf_points, node_points)
+            right = self.help_fill_node_points(self.tree_.children_right[node], leaf_points, node_points)
+            node_points[node] = left + right
+            return left + right
+        
     def find_leaf_points(self, X, y):
         """creates the MR models for the the leafs of the tree."""
-        parent_points = dict()
+        node_points = dict()
         leaf_classes = dict()
-        parent_classes = dict()
         self.confidence = dict()
         self.pertinence = dict()
-                      
+        leaf_points = dict()
+
         #initialize the dictionaries to contain arrays
         for key in self.leaf_parents:
-            parent_points[self.leaf_parents[key]] = []
-            parent_classes[self.leaf_parents[key]] = []
-                        
+            leaf_points[key] = []
+                                   
         #populate the parent_class dict with classes and parent_points with the datapoints it is associated with
         for i in range(len(X)):
             temp_leaf = self.apply(X[i])[0]
             cur_class = self.predict(X[i])[0]
             leaf_classes[temp_leaf] = cur_class
-            parent_points[self.leaf_parents[temp_leaf]].append(i)
-            if [temp_leaf, y[i][0]] not in parent_classes[self.leaf_parents[temp_leaf]]:
-                parent_classes[self.leaf_parents[temp_leaf]].append([temp_leaf, y[i][0]])
+            leaf_points[temp_leaf].append(i)
+
+        for leaf in leaf_points:
+            if leaf_points[leaf] == []:
+                print leaf
+
+        self.fill_node_points(leaf_points, node_points)
+        counter = 0
         #Create the libmr EVT model at each leaf
         for leaf in leaf_classes:
 
-            self.set_thresholds(leaf, parent_points, X, y, leaf_classes)
+            #self.set_thresholds(leaf, node_points, X, y, leaf_classes)
             in_class_distance = []
             non_class_distance = []
-            for point in parent_points[self.leaf_parents[leaf]]:
+            for point in node_points[self.leaf_parents[leaf]]:
                 if y[point][0] == leaf_classes[leaf]:
-                    in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.thresholds[leaf])
+                    in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
                 else:
-                    non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.thresholds[leaf])
+                    non_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
             class_distances = np.array(in_class_distance)
             non_class_distances = np.array(non_class_distance)
             
@@ -383,68 +406,52 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
             confidence_out = libmr.MR()
             pertinence_in = libmr.MR()
             pertinence_out = libmr.MR()
-            if len(non_class_distances) == 0:
-                if len(class_distances) <= 1:
-                    confidence_in = None
-                    confidence_out = None
-                    pertinence_out = None
-                    pertinence_in = None
-                elif len(class_distances) <= 5:
-                    confidence_in = 1
-                    confidence_out = 1
-                    mean = np.mean(class_distances)
-                    sd = 0
-                    for i in class_distances:
-                        sd += (i - mean) ** 2
-                    sd /= (len(class_distances) - 1)
-                    sd = sd ** (0.5)
-                    pertinence_in = (mean, sd)
+            
+            if len(class_distances) > 250:
+                tail = 50
             else:
-                if len(class_distances) > 250:
-                    tail = 50
+                tail = len(class_distances) / 5
+            if tail < 3:
+                tail = 3     
+            if len(class_distances) >= 5:
+                if np.median(class_distances) > 0:
+                    confidence_in.fit_low(class_distances, tail)
+                    pertinence_in.fit_high(class_distances, tail)
                 else:
-                    tail = len(class_distances) / 5
-                if tail < 3:
-                    tail = 3     
-                if len(class_distances) > 5:
-                    if np.median(class_distances) > 0:
-                        confidence_in.fit_low(class_distances, tail)
-                        pertinence_in.fit_high(class_distances, tail)
-                    else:
-                        confidence_in.fit_high(class_distances, tail)
-                        pertinence_in.fit_low(class_distances, tail)
+                    confidence_in.fit_high(class_distances, tail)
+                    pertinence_in.fit_low(class_distances, tail)
+            else:
+                confiedence_in = None
+                pertinence_in = None
+            if len(non_class_distances) > 250:
+                tail = 50
+            else:
+                tail = len(non_class_distances) / 5
+            if tail < 3:
+                tail = 3     
+            if len(non_class_distances) >= 5:
+                if np.median(class_distances) > 0:
+                    confidence_out.fit_high(non_class_distances, tail)
+                    pertinence_out.fit_low(non_class_distances, tail)
                 else:
-                    confiedence_in = None
-                    pertinence_in = None
-                if len(non_class_distances) > 250:
-                    tail = 50
-                else:
-                    tail = len(non_class_distances) / 5
-                if tail < 3:
-                    tail = 3     
-                if len(non_class_distances) > 5:
-                    if np.median(class_distances) > 0:
-                        confidence_out.fit_high(non_class_distances, tail)
-                        pertinence_out.fit_low(non_class_distances, tail)
-                    else:
-                        confidence_out.fit_low(non_class_distances, tail)
-                        pertinence_out.fit_high(non_class_distances, tail)
-                else:
-                    confidence_out = None
-                    pertinence_out = None
+                    confidence_out.fit_low(non_class_distances, tail)
+                    pertinence_out.fit_high(non_class_distances, tail)
+            else:
+                confidence_out = None
+                pertinence_out = None
                 
                 #if confidence_in != None and  confidence_in.is_valid and pertinence_in != None and pertinence_in.is_valid and confidence_out != None and confidence_out.is_valid and pertinence_out != None and pertinence_out.is_valid:
-                   # self.make_graph(class_distances, non_class_distances, confidence_in, confidence_out, pertinence_in, pertinence_out)
+                 #   self.make_graph(class_distances, non_class_distances, confidence_in, confidence_out, pertinence_in, pertinence_out)
             self.confidence[leaf] = [confidence_in, confidence_out]
             self.pertinence[leaf] = [pertinence_in, pertinence_out]
-
-    def set_thresholds(self, leaf, parent_points, X, y, leaf_classes):
+      
+    def set_thresholds(self, leaf, node_points, X, y, leaf_classes):
         '''Reset leaf thresholds to more accuratly split the class'''
         self.thresholds = dict()
         in_class_distance= []
         non_class_distance= []
         #Set the threshold to a more balanced location
-        for point in parent_points[self.leaf_parents[leaf]]:
+        for point in node_points[self.leaf_parents[leaf]]:
             if y[point][0] == leaf_classes[leaf]:
                 in_class_distance.append(X[point][self.tree_.feature[self.leaf_parents[leaf]]] - self.tree_.threshold[self.leaf_parents[leaf]])
             else:
@@ -769,23 +776,25 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
         predictions = []
         for j in range(len(point_class)):
             point_leaf = self.apply(X[j])[0]
-            if point_leaf not in self.thresholds:
-                predictions.append([])
-            else:
-                distance = X[j][self.tree_.feature[self.leaf_parents[point_leaf]]] - self.thresholds[point_leaf]
-                if point_leaf in self.confidence and self.confidence[point_leaf][0] != None and self.confidence[point_leaf][1] != None and point_leaf in self.pertinence and self.pertinence[point_leaf][0] != None:
-                    if self.confidence[point_leaf][0] == 1:
-                        pertinence = (distance - self.pertinence[point_leaf][0][0]) / float(self.pertinence[point_leaf][0][1])
-                        from scipy.stats import norm
-                        pertinence =  2.5 * norm.pdf(pertinence)
-                        predictions.append((point_class[j],1,pertinence))
-                    elif not self.confidence[point_leaf][0].is_valid or not self.confidence[point_leaf][1].is_valid or not self.pertinence[point_leaf][0].is_valid:
-                        predictions.append((point_class[j],0,0))
-                    else:
-                        confidence = self.confidence[point_leaf][0].w_score(distance) - self.confidence[point_leaf][1].w_score(distance)
-                        predictions.append((point_class[j], confidence, self.pertinence[point_leaf][0].w_score(distance)))
+            #if point_leaf not in self.thresholds:
+                #predictions.append([])
+            #else:
+            distance = X[j][self.tree_.feature[self.leaf_parents[point_leaf]]] - self.tree_.threshold[self.leaf_parents[point_leaf]]
+            if point_leaf in self.confidence and self.confidence[point_leaf][0] != None and self.confidence[point_leaf][1] != None and point_leaf in self.pertinence and self.pertinence[point_leaf][0] != None:
+            
+                if not self.confidence[point_leaf][0].is_valid or not self.confidence[point_leaf][1].is_valid or not self.pertinence[point_leaf][0].is_valid:
+                    predictions.append([])
                 else:
-                    predictions.append((point_class[j], 0, 0))
+                    cur_class = np.argmax(point_class[j])
+                    #for i in range(len(point_class[j])):
+                     #   if i != cur_class:
+                      #    point_class[j][i] = 0
+                    confidence_in = self.confidence[point_leaf][0].w_score(distance) 
+                    confidence_out = self.confidence[point_leaf][1].w_score(distance)
+                    confidence = confidence_in + (1 - confidence_out)
+                    predictions.append((point_class[j], confidence, self.pertinence[point_leaf][0].w_score(distance)))
+            else:
+                predictions.append([])
         if len(predictions) == 1:
             predictions = predictions[0]
         return predictions
