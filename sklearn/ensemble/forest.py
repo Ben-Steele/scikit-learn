@@ -477,7 +477,7 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
 
         # Reduce
         proba = all_proba[0]
-        if len(X) == 1:
+        if X.shape[0] == 1:
             proba = proba[0] * proba[1] * proba[2]
             counter = 1
             for j in range(1, len(all_proba)):
@@ -495,38 +495,50 @@ class ForestClassifier(six.with_metaclass(ABCMeta, BaseForest,
             proba = [proba / counter]
 
         else:
+            pertinence = []
             for i in range(len(proba)):
                 proba[i] = []
+                
             for k in range(len(all_proba[0])):
                 counter = 1
+                min_pertinence = 0
+                average_pertinence = 0
+                product_pertinence = 0
                 for j in range(0, len(all_proba)):
                     if len(all_proba[j][k]) != 0:
                         if len(proba[k]) == 0:
-                            if all_proba[j][k][2] > .001:
-                                for i in range(len(all_proba[j][k][0])):
-                                    all_proba[j][k][0][i] *= all_proba[j][k][1]# * all_proba[j][k][2]
-                                proba[k] = all_proba[j][k][0]
+                            #for i in range(len(all_proba[j][k][0])):
+                             #   all_proba[j][k][0][i] *= all_proba[j][k][1]# * all_proba[j][k][2]
+                            min_pertinence = all_proba[j][k][2][0]
+                            average_pertinence = all_proba[j][k][2][1]
+                            product_pertinence = all_proba[j][k][2][2]
+                            proba[k] = all_proba[j][k][0]
                         else:
-                            if all_proba[j][k][2] > 0.001:
-                                for i in range(len(all_proba[j][k][0])):
-                                    all_proba[j][k][0][i] *= all_proba[j][k][1]# * all_proba[j][k][2]
-                                proba[k] += all_proba[j][k][0]
-                                counter += 1
-
+                            #for i in range(len(all_proba[j][k][0])):
+                             #   all_proba[j][k][0][i] *= all_proba[j][k][1]# * all_proba[j][k][2]
+                            min_pertinence += all_proba[j][k][2][0]
+                            average_pertinence += all_proba[j][k][2][1]
+                            product_pertinence += all_proba[j][k][2][2]
+                            proba[k] += all_proba[j][k][0]
+                            counter += 1
+                min_pertinence /= float(counter)
+                average_pertinence /= float(counter)
+                product_pertinence /= float(counter)
+                pertinence.append((min_pertinence, average_pertinence, product_pertinence))
                 for i in proba[k]:
                     i = i / counter
                     
-        return proba
+        return proba, pertinence
 
     def evt_predict(self, X):
         proba = self.evt_predict_proba(X)
         classes = []
-        for i in proba:
+        for i in proba[0]:
             if len(i) == 0:
                 classes.append(-1)
             else:
                 classes.append(self.classes_.take(np.argmax(i)))
-        return classes
+        return classes, proba[1]
 ##################################################################
     
     def predict(self, X):
