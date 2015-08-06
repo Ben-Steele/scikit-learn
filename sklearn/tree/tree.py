@@ -342,6 +342,9 @@ class BaseDecisionTree(six.with_metaclass(ABCMeta, BaseEstimator,
         right = self.tree_.children_right
         leaf_parents = dict()
         parent_children = dict()
+
+        if self.tree_.feature[0] == -2:
+            leaf_parents[0] = [0]
         self.recurse_find_leaf(left[0], [0], left, right, leaf_parents, parent_children)
         self.recurse_find_leaf(right[0],[0], left, right, leaf_parents, parent_children)
         return leaf_parents, parent_children
@@ -845,7 +848,7 @@ class DecisionTreeClassifier(BaseDecisionTree, ClassifierMixin):
             else:
                 average_pertinence = pertinence / float(n_nodes)
                 if product_pertinence != 0.0:
-                    product_pertinence = math.log(product_pertinence) / math.log(10.0 * n_nodes)
+                    product_pertinence = math.log(product_pertinence) / math.log(10.0 ** n_nodes)
             # cur_class = np.argmax(point_class[j])
             #for i in range(len(point_class[j])):
              #   if i != cur_class:
